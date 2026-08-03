@@ -6,7 +6,7 @@ import base64
 import io
 from typing import Optional, Dict, Tuple, List, Any
 from dataclasses import dataclass, field
-from rebrowser_playwright.sync_api import Page
+from playwright.sync_api import Page
 
 try:
     import requests

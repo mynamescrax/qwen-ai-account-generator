@@ -8,10 +8,10 @@ import threading
 import requests
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from rebrowser_playwright.sync_api import sync_playwright
+from camoufox.sync_api import Camoufox
 
 
-from utils import BROWSER_ARGS, HEADLESS_ARGS, SELECTORS, timing
+from utils import SELECTORS, timing
 from captcha_solver import CaptchaSolver
 from config import CONFIG
 
@@ -228,19 +228,19 @@ class TempEmail:
                 resp = self.session.get(f'{self.BASE}/messages')
                 if resp.status_code != 200:
                     logger.warning(f"Poll #{poll_count}: status {resp.status_code}")
-                    time.sleep(3)
+                    time.sleep(2)
                     continue
 
                 data = resp.json()
                 messages = data.get('hydra:member', []) if isinstance(data, dict) else data
             except Exception as e:
                 logger.warning(f"Poll #{poll_count}: error {e}")
-                time.sleep(3)
+                time.sleep(2)
                 continue
 
             if not messages:
                 logger.info(f"Poll #{poll_count}: no messages yet")
-                time.sleep(3)
+                time.sleep(2)
                 continue
 
             logger.info(f"Poll #{poll_count}: got {len(messages)} message(s)")
@@ -289,7 +289,7 @@ class TempEmail:
                 else:
                     logger.info(f"  Non-verification email, skipping")
 
-            time.sleep(3)
+            time.sleep(2)
 
         logger.warning("Timeout waiting for verification email")
         return None
@@ -300,226 +300,16 @@ def signup(email, password, mail=None):
     timing.start('total_signup')
 
     try:
-        with sync_playwright() as p:
-            args = list(BROWSER_ARGS)
-            if CONFIG.get('headless', False):
-                args.extend(HEADLESS_ARGS)
-
-            browser = p.chromium.launch(
-                headless=CONFIG.get('headless', False),
-                args=args
-            )
-
+        with Camoufox(
+            headless=CONFIG.get('headless', False),
+            os='windows',
+            locale='en-US',
+        ) as browser:
             context = browser.new_context(
                 viewport={'width': CONFIG['viewport_width'], 'height': CONFIG['viewport_height']},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
                 locale='en-US',
                 timezone_id='America/New_York',
-                extra_http_headers={
-                    'Accept-Language': 'en-US,en;q=0.9',
-                }
             )
-
-            context.add_init_script("""
-                // === webdriver ===
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => undefined,
-                    configurable: true
-                });
-                delete navigator.__proto__.webdriver;
-
-                // === cdc_ cleanup (Playwright/ChromeDriver artifact) ===
-                for (const key of Object.keys(window)) {
-                    if (key.startsWith('cdc_') || key.startsWith('$cdc_')) {
-                        try { delete window[key]; } catch(e) {}
-                    }
-                }
-                const origGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
-                Object.getOwnPropertyDescriptor = function(obj, prop) {
-                    if (prop && typeof prop === 'string' && (prop.startsWith('cdc_') || prop.startsWith('$cdc_'))) {
-                        return undefined;
-                    }
-                    return origGetOwnPropertyDescriptor.call(this, obj, prop);
-                };
-
-                // === languages ===
-                Object.defineProperty(navigator, 'languages', {
-                    get: () => ['en-US', 'en'],
-                    configurable: true
-                });
-
-                // === window.chrome (full spoof) ===
-                window.chrome = {
-                    app: {
-                        isInstalled: false,
-                        InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
-                        RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' },
-                        getDetails: () => null,
-                        getIsInstalled: () => false,
-                        installState: () => 'not_installed',
-                        RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' }
-                    },
-                    runtime: {
-                        OnInstalledReason: { CHROME_UPDATE: 'chrome_update', INSTALL: 'install', SHARED_MODULE_UPDATE: 'shared_module_update', UPDATE: 'update' },
-                        OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' },
-                        PlatformArch: { ARM: 'arm', ARM64: 'arm64', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64' },
-                        PlatformNaclArch: { ARM: 'arm', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64' },
-                        PlatformOs: { ANDROID: 'android', CROS: 'cros', LINUX: 'linux', MAC: 'mac', OPENBSD: 'openbsd', WIN: 'win' },
-                        RequestUpdateCheckStatus: { NO_UPDATE: 'no_update', THROTTLED: 'throttled', UPDATE_AVAILABLE: 'update_available' },
-                        connect: () => {},
-                        sendMessage: () => {},
-                        id: undefined
-                    },
-                    csi: () => ({}),
-                    loadTimes: () => ({
-                        commitLoadTime: performance.timing.responseStart / 1000,
-                        connectionInfo: 'http/1.1',
-                        finishDocumentLoadTime: performance.timing.domContentLoadedEventEnd / 1000,
-                        finishLoadTime: performance.timing.loadEventEnd / 1000,
-                        firstPaintAfterLoadTime: 0,
-                        firstPaintTime: performance.timing.domContentLoadedEventEnd / 1000,
-                        navigationType: 'Other',
-                        npnNegotiatedProtocol: 'unknown',
-                        requestTime: performance.timing.navigationStart / 1000,
-                        startLoadTime: performance.timing.navigationStart / 1000,
-                        wasAlternateProtocolAvailable: false,
-                        wasFetchedViaSpdy: false,
-                        wasNpnNegotiated: false
-                    })
-                };
-
-                // === navigator.plugins (real PluginArray) ===
-                const makePlugin = (name, filename, desc) => {
-                    const plugin = Object.create(Plugin.prototype);
-                    Object.defineProperties(plugin, {
-                        name: { value: name, enumerable: true },
-                        filename: { value: filename, enumerable: true },
-                        description: { value: desc, enumerable: true },
-                        length: { value: 1, enumerable: true }
-                    });
-                    plugin[0] = Object.create(MimeType.prototype);
-                    Object.defineProperties(plugin[0], {
-                        type: { value: 'application/pdf', enumerable: true },
-                        suffixes: { value: 'pdf', enumerable: true },
-                        description: { value: desc, enumerable: true },
-                        enabledPlugin: { value: plugin, enumerable: true }
-                    });
-                    return plugin;
-                };
-                const plugins = [
-                    makePlugin('Chrome PDF Plugin', 'internal-pdf-viewer', 'Portable Document Format'),
-                    makePlugin('Chrome PDF Viewer', 'mhjfbmdgcfjbbpaeojofohoefgiehjai', 'Portable Document Format'),
-                    makePlugin('Native Client', 'internal-nacl-plugin', ''),
-                ];
-                const pluginArray = Object.create(PluginArray.prototype);
-                plugins.forEach((p, i) => {
-                    Object.defineProperty(pluginArray, i, { value: p, enumerable: true });
-                    Object.defineProperty(pluginArray, p.name, { value: p, enumerable: true });
-                });
-                Object.defineProperties(pluginArray, {
-                    length: { value: plugins.length, enumerable: true },
-                    item: { value: (i) => plugins[i] || null },
-                    namedItem: { value: (n) => plugins.find(p => p.name === n) || null },
-                    refresh: { value: () => {} }
-                });
-                Object.defineProperty(navigator, 'plugins', {
-                    get: () => pluginArray,
-                    configurable: true
-                });
-
-                // === canvas fingerprint noise ===
-                const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-                HTMLCanvasElement.prototype.toDataURL = function(type) {
-                    if (type === 'image/webp') return origToDataURL.apply(this, arguments);
-                    const ctx = this.getContext('2d');
-                    if (ctx) {
-                        const imageData = ctx.getImageData(0, 0, this.width, this.height);
-                        for (let i = 0; i < imageData.data.length; i += 4) {
-                            imageData.data[i] ^= 1;
-                        }
-                        ctx.putImageData(imageData, 0, 0);
-                    }
-                    return origToDataURL.apply(this, arguments);
-                };
-                const origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
-                CanvasRenderingContext2D.prototype.getImageData = function() {
-                    const imageData = origGetImageData.apply(this, arguments);
-                    for (let i = 0; i < imageData.data.length; i += 4) {
-                        imageData.data[i] ^= 1;
-                    }
-                    return imageData;
-                };
-
-                // === permissions API ===
-                const origQuery = window.Permissions && Permissions.prototype.query;
-                if (origQuery) {
-                    Permissions.prototype.query = function(desc) {
-                        if (desc && desc.name === 'notifications') {
-                            return Promise.resolve({ state: Notification.permission });
-                        }
-                        return origQuery.call(this, desc);
-                    };
-                }
-
-                // === connection rtt ===
-                if (navigator.connection) {
-                    Object.defineProperty(navigator.connection, 'rtt', {
-                        get: () => 100,
-                        configurable: true
-                    });
-                }
-
-                // === screen properties (headless spoof) ===
-                Object.defineProperty(screen, 'availWidth', { get: () => 1920 });
-                Object.defineProperty(screen, 'availHeight', { get: () => 1040 });
-                Object.defineProperty(screen, 'width', { get: () => 1920 });
-                Object.defineProperty(screen, 'height', { get: () => 1080 });
-                Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
-                Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
-
-                // === outerWidth/outerHeight (headless has these equal to inner) ===
-                Object.defineProperty(window, 'outerWidth', { get: () => window.innerWidth });
-                Object.defineProperty(window, 'outerHeight', { get: () => window.innerHeight + 85 });
-
-                // === WebGL vendor/renderer spoof ===
-                const getParameter = WebGLRenderingContext.prototype.getParameter;
-                WebGLRenderingContext.prototype.getParameter = function(param) {
-                    if (param === 37445) return 'Intel Inc.';
-                    if (param === 37446) return 'Intel Iris OpenGL Engine';
-                    return getParameter.call(this, param);
-                };
-                const getParameter2 = WebGL2RenderingContext.prototype.getParameter;
-                WebGL2RenderingContext.prototype.getParameter = function(param) {
-                    if (param === 37445) return 'Intel Inc.';
-                    if (param === 37446) return 'Intel Iris OpenGL Engine';
-                    return getParameter2.call(this, param);
-                };
-
-                // === battery API (headless missing) ===
-                if (!navigator.getBattery) {
-                    navigator.getBattery = () => Promise.resolve({
-                        charging: true,
-                        chargingTime: 0,
-                        dischargingTime: Infinity,
-                        level: 1,
-                        addEventListener: () => {},
-                        removeEventListener: () => {},
-                    });
-                }
-
-                // === media devices (headless missing) ===
-                if (!navigator.mediaDevices) {
-                    Object.defineProperty(navigator, 'mediaDevices', {
-                        get: () => ({
-                            enumerateDevices: () => Promise.resolve([
-                                { kind: 'audioinput', deviceId: '', label: '', groupId: '' },
-                                { kind: 'videoinput', deviceId: '', label: '', groupId: '' },
-                            ]),
-                            getUserMedia: () => Promise.reject(new Error('Not supported')),
-                        })
-                    });
-                }
-            """)
 
             page = context.new_page()
 
@@ -852,7 +642,7 @@ def signup(email, password, mail=None):
                         logger.info(f"Page redirected after Create Account: {current_url}")
 
                 logger.info("Captcha solved, checking for verification email...")
-                time.sleep(2)
+                time.sleep(1)
 
                 if mail:
                     logger.info("Polling temp email for verification link...")
@@ -862,11 +652,11 @@ def signup(email, password, mail=None):
                         logger.info(f"Got verification link: {verification_link[:80]}...")
 
                         page.goto(verification_link, timeout=30000)
-                        time.sleep(3)
+                        time.sleep(2)
 
                         logger.info("Verification link visited, force-navigating to chat...")
                         page.goto('https://chat.qwen.ai/', timeout=30000)
-                        time.sleep(3)
+                        time.sleep(2)
 
                         stored_token = extract_token(page)
 
@@ -880,7 +670,7 @@ def signup(email, password, mail=None):
                         logger.warning("No verification link received from temp email")
 
                 page.goto('https://chat.qwen.ai/', timeout=30000)
-                time.sleep(2)
+                time.sleep(1)
 
                 stored_token = extract_token(page)
 

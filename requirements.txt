@@ -1,4 +1,4 @@
-rebrowser-playwright
+camoufox
 ddddocr
 opencv-python
 Pillow

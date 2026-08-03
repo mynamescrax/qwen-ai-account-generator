@@ -1,8 +1,8 @@
 CONFIG = {
     # General
-    'count': 10,
+    'count': 100,
     'threads': 5,
-    'headless': False, # headless DOES NOT WORK!
+    'headless': True, # Camoufox handles headless fine
     'timeout': 30000,
     'viewport_width': 1280,
     'viewport_height': 720,

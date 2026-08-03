@@ -9,31 +9,6 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-BROWSER_ARGS = [
-    '--disable-blink-features=AutomationControlled',
-    '--disable-features=AutomationControlled',
-    '--disable-dev-shm-usage',
-    '--disable-infobars',
-    '--window-size=1280,720',
-    '--disable-extensions',
-    '--lang=en-US,en',
-    '--disable-background-networking',
-    '--disable-background-timer-throttling',
-    '--disable-backgrounding-occluded-windows',
-    '--disable-renderer-backgrounding',
-    '--disable-component-update',
-    '--no-first-run',
-    '--password-store=basic',
-    '--use-mock-keychain',
-    '--disable-domain-reliability',
-]
-
-HEADLESS_ARGS = [
-    '--no-sandbox',
-    '--disable-gpu',
-    '--disable-software-rasterizer',
-]
-
 SELECTORS = {
     'continue_with_email': 'button:has-text("Log in with Email")',
     'continue_with_google': 'button:has-text("Continue with Google")',
