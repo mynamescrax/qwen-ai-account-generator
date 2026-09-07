@@ -1,11 +1,14 @@
 CONFIG = {
     # General
-    'count': 100,
-    'threads': 5,
+    'count': 99999,
+    'threads': 7,
     'headless': True, # Camoufox handles headless fine
     'timeout': 30000,
     'viewport_width': 1280,
     'viewport_height': 720,
+
+    # Email verification poll timeout
+    'verify_timeout': 90,
 
     # Captcha
     'max_captcha_attempts': 15,
