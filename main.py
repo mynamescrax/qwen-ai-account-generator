@@ -159,35 +159,59 @@ class Worker:
                 self._fox = None
 
 
-def extract_token(page) -> str:
+def _is_access_token(val) -> bool:
+    # Live API sessions are type=access_token (kid=legacy) JWTs. The `token`
+    # cookie holds a legacy JWT that 401s everywhere — prefer access-type.
     try:
-        token = page.evaluate("""
+        import base64 as _b64
+        import json as _json
+        parts = (val or '').split('.')
+        if len(parts) != 3:
+            return False
+        pay = parts[1] + '=' * (-len(parts[1]) % 4)
+        return _json.loads(_b64.urlsafe_b64decode(pay)).get('type') == 'access_token'
+    except Exception:
+        return False
+
+
+def extract_token(page) -> str:
+    candidates = []
+    try:
+        found = page.evaluate("""
             () => {
-                const cookies = document.cookie.split(';');
-                for (const c of cookies) {
-                    const [name, ...rest] = c.trim().split('=');
-                    if (name === 'token') {
-                        const val = rest.join('=');
-                        if (val && val.length > 50) return val;
+                const out = [];
+                try {
+                    for (const c of document.cookie.split(';')) {
+                        const [name, ...rest] = c.trim().split('=');
+                        if (name === 'token') {
+                            const v = rest.join('=');
+                            if (v && v.length > 50) out.push(['cookie:token', v]);
+                        }
                     }
-                }
-                const keys = ['token', 'active_token', 'access_token', 'auth_token', 'jwt', 'accessToken'];
-                for (const key of keys) {
-                    let val = localStorage.getItem(key);
-                    if (val && val.length > 50) return val;
-                    val = sessionStorage.getItem(key);
-                    if (val && val.length > 50) return val;
-                }
-                for (let i = 0; i < localStorage.length; i++) {
-                    const key = localStorage.key(i);
-                    const val = localStorage.getItem(key);
-                    if (val && val.length > 80 && val.split('.').length === 3) return val;
-                }
-                return null;
+                } catch (e) {}
+                try {
+                    const keys = ['token', 'active_token', 'access_token', 'auth_token', 'jwt', 'accessToken'];
+                    for (const key of keys) {
+                        for (const store of [localStorage, sessionStorage]) {
+                            try {
+                                const v = store.getItem(key);
+                                if (v && v.length > 50) out.push(['store:' + key, v]);
+                            } catch (e) {}
+                        }
+                    }
+                    for (let i = 0; i < localStorage.length; i++) {
+                        try {
+                            const key = localStorage.key(i);
+                            const v = localStorage.getItem(key);
+                            if (v && v.length > 80 && v.split('.').length === 3) out.push(['store:any:' + key, v]);
+                        } catch (e) {}
+                    }
+                } catch (e) {}
+                return out;
             }
         """)
-        if token and len(token) > 50:
-            return token
+        if found:
+            candidates.extend(found)
     except Exception:
         pass
 
@@ -195,21 +219,54 @@ def extract_token(page) -> str:
         cookies = page.context.cookies('https://chat.qwen.ai')
         for c in cookies:
             if c['name'] == 'token' and c['value'] and len(c['value']) > 50:
-                return c['value']
+                candidates.append(['ctx-cookie:token', c['value']])
     except Exception:
         pass
 
+    for _src, val in candidates:
+        if val and len(val) > 50 and _is_access_token(val):
+            return val
+    for _src, val in candidates:
+        if val and len(val) > 50:
+            return val
+
     return None
 
 
-def _wait_for_token(page, timeout=15):
-    deadline = time.time() + timeout
+def _wait_for_token(page, timeout=45):
+    # Prefer an access_token for the whole window: the legacy `token` cookie
+    # exists immediately while localStorage access lands only after the chat
+    # app boots and runs its refresh cycle (signalled by
+    # qwen_access_token_state). Reload once if the app hasn't booted 15s in —
+    # reloads are cookie-safe and retrigger boot. Fall back to legacy only if
+    # no access-type shows up in time.
+    start = time.time()
+    deadline = start + timeout
+    fallback = None
+    reloaded = False
     while time.time() < deadline:
-        token = extract_token(page)
-        if token and len(token) > 50:
-            return token
+        try:
+            booted = page.evaluate("() => !!localStorage.getItem('qwen_access_token_state')")
+        except Exception:
+            booted = False
+        if not booted and not reloaded and time.time() - start > 15:
+            try:
+                page.reload(timeout=30000)
+            except Exception:
+                pass
+            reloaded = True
+        if booted:
+            token = extract_token(page)
+            if token and len(token) > 50:
+                if _is_access_token(token):
+                    return token
+                if not fallback:
+                    fallback = token
         time.sleep(1)
-    return None
+    token = extract_token(page)
+    if token and len(token) > 50:
+        return token
+    return fallback
 
 
 class TempMailBase:
@@ -1098,6 +1155,8 @@ def _create_account(worker, index):
 
 
 def _worker_loop(worker, indices):
+    recycle_after = CONFIG.get('browser_recycle_after', 50)
+    accounts_since_recycle = 0
     try:
         for index in indices:
             try:
@@ -1105,6 +1164,15 @@ def _worker_loop(worker, indices):
             except Exception as e:
                 logger.error(f"Account {index} crashed: {e}")
             time.sleep(1 + random.uniform(0, 1.5))
+
+            accounts_since_recycle += 1
+            if accounts_since_recycle >= recycle_after:
+                logger.info(f"[w{worker.worker_id}] recycling browser after {accounts_since_recycle} accounts...")
+                try:
+                    worker.close()
+                except Exception:
+                    pass
+                accounts_since_recycle = 0
     finally:
         worker.close()
 
